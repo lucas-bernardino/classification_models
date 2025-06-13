@@ -2,142 +2,163 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.decomposition import PCA
-from sklearn.model_selection import KFold
+from sklearn.feature_selection import VarianceThreshold
+from sklearn.model_selection import StratifiedKFold, GridSearchCV, cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
-from xgboost import XGBClassifier
-from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import f1_score
-from sklearn.preprocessing import LabelEncoder
+from sklearn.svm import SVC
+from sklearn.dummy import DummyClassifier
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
-data = pd.read_csv('09.csv', header=None) 
+# import warnings
+# warnings.filterwarnings("ignore")
 
-features = data.iloc[:, :-1]  # features 
-target = data.iloc[:, -1]   # target
 
+# Load data
+data = pd.read_csv('09.csv', header=None)
+features = data.iloc[1:, :-1]
+target = data.iloc[1:, -1]
 
 def first_look_dataset(X, y):
-    print("Dataset Shape:", data.shape)  # (105, 183)
-    print("Number of Features:", X.shape[1])  # 182 features
-    print("Class Distribution:\n", y.value_counts())  # check class balance
-    print("Missing Values:", data.isnull().sum().sum())  # check for missing values (in this case, there are none)
+    print("Dataset Shape:", data.shape)
+    print("Number of Features:", X.shape[1])
+    print("Class Distribution:\n", y.value_counts())
+    print("Number of Unique Classes:", y.nunique())
+    print("Missing Values:", data.isnull().sum().sum())
+    print("Feature Data Types:", X.dtypes.unique())
+    print("Target Data Type:", y.dtype)
     print("-----")
+    print(X.describe())
+    
+    # Visualize class distribution
+    plt.figure(figsize=(8, 5))
+    sns.countplot(x=y)
+    plt.title("Class Distribution")
+    plt.xlabel("Class")
+    plt.ylabel("Count")
+    plt.savefig("class_distribution.png", dpi=300)
+    plt.close()
 
-    print(X.describe()) # mean, std, min, max for each feature
-
-first_look_dataset(features, target)
+def variance_threshold(X, threshold=0.1):
+    selector = VarianceThreshold(threshold=threshold)
+    X_var = selector.fit_transform(X)
+    print(f"Features after variance threshold: {X_var.shape[1]}")
+    return X_var
 
 def pearson_correlation_filtering(X):
-    """
-    Highly correlated features may be redundant, as they provide similar information. 
-    Removing one feature from such pairs can reduce dimensionality without significant information loss. 
-    The code below is doing basically that by applying Pearson correlation to check if its > 0.95
-    """
     corr_matrix = pd.DataFrame(X).corr().abs()
-
-    # select upper triangle
     upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-
-    # find columns with correlation higher than 0.95
     to_drop = [column for column in upper.columns if any(upper[column] > 0.95)]
-
-    # drop these columns
     X_dropped = pd.DataFrame(X).drop(columns=to_drop)
-
-    
-    print(f"Original features shape: {X.shape} | After Pearson correlation {X_dropped.shape}")
-    # After doing Pearson correlation, the features dataset went from a shape of (105, 182) to (105, 115)
-    
+    print(f"Original features shape: {X.shape} | After Pearson correlation: {X_dropped.shape}")
     return X_dropped
 
 def visualize_pca(X):
     pca = PCA()
     pca.fit(X)
-
     explained_variance = pca.explained_variance_ratio_
     cumulative_variance = np.cumsum(explained_variance)
-
+    
     plt.figure(figsize=(8, 5))
     plt.plot(cumulative_variance, marker='o')
     plt.axhline(y=0.95, color='r', linestyle='--')
-    plt.xlabel('Number of components')
-    plt.ylabel('Cumulative explained variance')
+    plt.xlabel('Number of Components')
+    plt.ylabel('Cumulative Explained Variance')
     plt.title('Explained Variance vs Number of Components')
     plt.grid(True)
-    plt.show()
+    plt.savefig("pca_variance.png", dpi=300)
+    plt.close()
+    
+    # Return number of components for 95% variance
+    n_components = np.argmax(cumulative_variance >= 0.95) + 1
+    print(f"Components for 95% variance: {n_components}")
+    return n_components
 
-def apply_pca(X):
-    pca = PCA(n_components=10)
+def apply_pca(X, n_components=None):
+    if n_components is None:
+        pca = PCA(n_components=0.95)  # Retain 95% variance
+    else:
+        pca = PCA(n_components=n_components)
     X_pca = pca.fit_transform(X)
-    
-    
-    return X_pca
+    print(f"Features after PCA: {X_pca.shape[1]}")
+    return X_pca, pca
 
 def standardization(X):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    
-    return X_scaled
+    return X_scaled, scaler
 
-def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=5, random_state=42):
+def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_state=42):
+    # Encode target
     le = LabelEncoder()
     y_encoded = le.fit_transform(y)
     
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-    cv_scores = []
-
+    # Adjust n_splits based on minimum class size
+    min_class_size = pd.Series(y_encoded).value_counts().min()
+    n_splits = min(n_splits, max(2, min_class_size))
+    print(f"Using {n_splits}-fold CV due to class distribution")
+    
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    
     if model_type == 'knn':
         param_grid = {'n_neighbors': [3, 5, 7], 'weights': ['uniform', 'distance'], 'metric': ['euclidean']}
         model = KNeighborsClassifier()
     elif model_type == 'dt':
-        param_grid = {'max_depth': [3, 5, None], 'min_samples_split': [2, 5, 10], 'criterion': ['gini', 'entropy']}
+        param_grid = {'max_depth': [3, 5, None], 'min_samples_split': [2, 5, 10], 'criterion': ['gini', 'entropy'], 'class_weight': ['balanced', None]}
         model = DecisionTreeClassifier(random_state=random_state)
-    # elif model_type == 'xgb':
-    #     param_grid = {'n_estimators': [50, 100], 'max_depth': [3, 5], 'learning_rate': [0.01, 0.1], 'subsample': [0.6, 0.8]}
-    #     model = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', random_state=random_state)
-
-    grid_search = GridSearchCV(model, param_grid, cv=kf, scoring='f1_macro', n_jobs=-1)
-    grid_search.fit(X, y_encoded if model_type == 'xgb' else y)
-
-    # Cross-validation scores
-    cv_scores = grid_search.cv_results_['mean_test_score']
+    elif model_type == 'svm':
+        param_grid = {'C': [0.1, 1, 10], 'kernel': ['linear', 'rbf'], 'gamma': ['scale', 0.1], 'class_weight': ['balanced', None]}
+        model = SVC(probability=True, random_state=random_state)
+    
+    grid_search = GridSearchCV(model, param_grid, cv=cv, scoring='f1_weighted', n_jobs=-1)
+    grid_search.fit(X, y_encoded)
+    
+    # Results
     best_score = grid_search.best_score_
     best_params = grid_search.best_params_
-    print(f"{model_type.upper()} - Best F1-score (CV): {best_score:.3f} with params {best_params}")
+    print(f"{model_type.upper()} - Best Weighted F1-score (CV): {best_score:.3f} with params {best_params}")
+    
+    y_pred = grid_search.best_estimator_.predict(X)
+    
+    # Confusion matrix
+    cm = confusion_matrix(y_encoded, y_pred)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=le.classes_, yticklabels=le.classes_)
+    plt.title(f"{model_type.upper()} Confusion Matrix")
+    plt.savefig(f"{model_type}_confusion_matrix.png", dpi=300)
+    plt.close()
+    
+    # CV scores boxplot
+    scores = cross_val_score(grid_search.best_estimator_, X, y_encoded, cv=cv, scoring='f1_weighted')
+    plt.figure(figsize=(6, 4))
+    sns.boxplot(data=scores)
+    plt.title(f"{model_type.upper()} Cross-Validation Weighted F1-Scores")
+    plt.savefig(f"{model_type}_cv_scores.png", dpi=300)
+    plt.close()
+    
+    return grid_search, le
 
-    return grid_search
+# Run EDA
+first_look_dataset(features, target)
 
-X_correlation = pearson_correlation_filtering(features)
-X_pca = apply_pca(features)
-
-X_standardized_correlation = standardization(X_correlation)
-X_standardized_pca = standardization(X_pca)
-
-print("Results for training with no pre processing")
-knn_scaled = train_and_evaluate_with_kfold(features, target, 'knn')
-dt_scaled = train_and_evaluate_with_kfold(features, target, 'dt')
-
-print("\nResults for X_correlation: ")
-knn_scaled = train_and_evaluate_with_kfold(X_correlation, target, 'knn')
-dt_scaled = train_and_evaluate_with_kfold(X_correlation, target, 'dt')
-# xgb_scaled = train_and_evaluate_with_kfold(X_correlation, target, 'xgb')
+# Preprocessing
+X_var = variance_threshold(features)
+X_corr = pearson_correlation_filtering(X_var)
+n_components = visualize_pca(X_corr)
+X_pca, pca = apply_pca(X_corr, n_components=n_components)
+X_std_corr, scaler_corr = standardization(X_corr)
+X_std_pca, scaler_pca = standardization(X_pca)
 
 
-print("\nResults for X_standardized_correlation: ")
-knn_scaled = train_and_evaluate_with_kfold(X_standardized_correlation, target, 'knn')
-dt_scaled = train_and_evaluate_with_kfold(X_standardized_correlation, target, 'dt')
-# xgb_scaled = train_and_evaluate_with_kfold(X_standardized_correlation, target, 'xgb')
+# Train and evaluate
+print("\nResults for X_standardized_correlation (balanced):")
+knn_corr, le_knn = train_and_evaluate_with_kfold(X_std_corr, target, 'knn')
+dt_corr, _ = train_and_evaluate_with_kfold(X_std_corr, target, 'dt')
+svm_corr, _ = train_and_evaluate_with_kfold(X_std_corr, target, 'svm')
 
-
-print("\nResults for X_pca: ")
-knn_pca = train_and_evaluate_with_kfold(X_pca, target, 'knn')
-dt_pca = train_and_evaluate_with_kfold(X_pca, target, 'dt')
-# xgb_pca = train_and_evaluate_with_kfold(X_pca, target, 'xgb')
-
-print("\nResults for X_standardized_pca: ")
-knn_pca = train_and_evaluate_with_kfold(X_standardized_pca, target, 'knn')
-dt_pca = train_and_evaluate_with_kfold(X_standardized_pca, target, 'dt')
-# xgb_pca = train_and_evaluate_with_kfold(X_standardized_pca, target, 'xgb')
+print("\nResults for X_standardized_pca (balanced):")
+knn_pca, _ = train_and_evaluate_with_kfold(X_std_pca, target, 'knn')
+dt_pca, _ = train_and_evaluate_with_kfold(X_std_pca, target, 'dt')
+svm_pca, _ = train_and_evaluate_with_kfold(X_std_pca, target, 'svm')
