@@ -6,7 +6,7 @@ import seaborn as sns
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.model_selection import StratifiedKFold, GridSearchCV, cross_val_score
+from sklearn.model_selection import StratifiedKFold, GridSearchCV, cross_val_score, cross_val_predict
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import SVC
@@ -25,6 +25,7 @@ data = pd.read_csv(FILE_NAME, header=None)
 features = data.iloc[1:, :-1]
 target = data.iloc[1:, -1]
 
+### EDA
 def first_look_dataset(X, y):
     print("File: ", FILE_NAME)
     print("Dataset Shape:", X.shape)
@@ -40,68 +41,19 @@ def first_look_dataset(X, y):
     plt.savefig("class_distribution.png", dpi=300)
     plt.close()
 
-def pearson_correlation_filtering(X, threshold):
-    """
-    highly correlated features may be redundant, as they provide similar information. 
-    removing one feature from such pairs can reduce dimensionality without significant information loss. 
-    the code below is doing basically that by applying Pearson correlation with the threshold
-    """
-    
-    corr_matrix = pd.DataFrame(X).corr().abs() # computes the absolute Pearson correlation
-    upper_triangle = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)) # get only the upper triangle of the matrix to avoid duplicates
-    features_correlated = [column for column in upper_triangle.columns if any(upper_triangle[column] > threshold)] # get the features correlated
-    X_dropped = pd.DataFrame(X).drop(columns=features_correlated) # remove the correlated features, leaving the others as it is.
-    print(f"[Pearson correlation] Before: {X.shape} | After: {X_dropped.shape}")
-    return X_dropped
+### BASELINE
+def dummy_baseline(X, y):
+    le = LabelEncoder()
+    y_enc = le.fit_transform(y)
+    dummy = DummyClassifier(random_state=42)
+    scores = cross_val_score(dummy, X, y_enc, cv=5, scoring="f1_weighted")
+    preds = cross_val_predict(dummy, X, y_enc, cv=5)
+    print(f"Baseline (DummyClassifier): F1-weighted = {scores.mean():.3f} ± {scores.std():.3f}")
+    print(f"DummyClassifier - Classification Report:")
+    print(classification_report(y_enc, preds, zero_division=0))
 
-def visualize_pca(X, n_components):
-
-    
-    
-    pca = PCA(n_components=0.95)
-    pca.fit(X)
-    explained_variance = pca.explained_variance_ratio_
-    cumulative_variance = np.cumsum(explained_variance)
-    
-    plt.figure(figsize=(8, 5))
-    plt.plot(cumulative_variance, marker='o')
-    plt.axhline(y=0.95, color='r', linestyle='--')
-    plt.xlabel('Number of Components')
-    plt.ylabel('Cumulative Explained Variance')
-    plt.title('Explained Variance vs Number of Components')
-    plt.grid(True)
-    plt.savefig("pca_variance.png", dpi=300)
-    plt.close()
-    
-    # return number of components for 95% variance
-    n_components = np.argmax(cumulative_variance >= 0.95) + 1
-    return n_components
-
-def apply_pca(X, n_components):
-    """
-    reduces the number of dimensions in large datasets to principal components that retain most of the original information.
-    it does this by transforming potentially correlated variables into a smaller set of variables, called principal components.
-    """
-    
-    # if n_components is < 1, it'll reduce dimensionality by retaining the value in percetage of the variance.
-    # so if n_components is 0.95, PCA selects the smallest number of components such that the cumulative explained variance ratio is at least 0.95 (95%)
-    pca = PCA(n_components=n_components)
-    X_pca = pca.fit_transform(X)
-    print(f"[PCA] Before: {X.shape} | After : {X_pca.shape}")
-    return X_pca, pca
-
-def standardization(X):
-    """
-    removes the mean and scales to unit variance, making X look like a normally distributed data (gaussian).
-    some models assume the data is standardized.
-    """
-    
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    return X_scaled, scaler
-
+### PRE PROCESSING
 def remove_outliers(X, y):
-    
     # contamination is the proportion of outliers in the data set
     iso = IsolationForest(contamination=0.1, random_state=42)
     outlier_labels = iso.fit_predict(X)
@@ -120,12 +72,67 @@ def balance_classes(X, y):
     """
     smote = SMOTE()
     X_balanced, y_balanced = smote.fit_resample(X, y)
-    
     print(f"[Balance Classes] Before: {X.shape} | After: {X_balanced.shape}")
     
     return X_balanced, y_balanced
 
-def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_state=42, verbose=True):
+def visualize_pearson_correlation(X):
+    """
+    highly correlated features may be redundant, as they provide similar information. 
+    removing one feature from such pairs can reduce dimensionality without significant information loss. 
+    the code below is doing basically that by applying Pearson correlation with the threshold
+    """
+    corr_matrix = pd.DataFrame(X).corr().abs() # computes the absolute Pearson correlation
+    
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(corr_matrix, cmap='coolwarm')
+    plt.title("Feature correlation")
+    plt.savefig("feature_correlation.png")
+    plt.close()
+    
+def pearson_correlation_filtering(X, threshold):
+    corr_matrix = pd.DataFrame(X).corr().abs() # computes the absolute Pearson correlation
+    upper_triangle = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)) # get only the upper triangle of the matrix to avoid duplicates
+    features_correlated = [column for column in upper_triangle.columns if any(upper_triangle[column] > threshold)] # get the features correlated
+    X_dropped = pd.DataFrame(X).drop(columns=features_correlated) # remove the correlated features, leaving the others as it is.
+    print(f"[Pearson correlation] Before: {X.shape} | After: {X_dropped.shape}")
+    
+    return X_dropped
+
+def visualize_pca(X, n_components):
+    """
+    reduces the number of dimensions in large datasets to principal components that retain most of the original information.
+    it does this by transforming potentially correlated variables into a smaller set of variables, called principal components.
+    """
+    pca = PCA(n_components=n_components)
+    pca.fit(X)
+    explained_variance = pca.explained_variance_ratio_
+    cumulative_variance = np.cumsum(explained_variance)
+    
+    plt.figure(figsize=(8, 5))
+    plt.plot(cumulative_variance, marker='o')
+    plt.axhline(y=0.95, color='r', linestyle='--')
+    plt.xlabel('Components')
+    plt.ylabel('Variance')
+    plt.title('PCA Visualization')
+    plt.grid(True)
+    plt.savefig("pca_variance.png")
+    plt.close()
+    
+    # return number of components for 95% variance
+    n_components = np.argmax(cumulative_variance >= 0.95) + 1
+    return n_components
+
+def pca_filtering(X, n_components):
+    # if n_components is < 1, it'll reduce dimensionality by retaining the value in percetage of the variance.
+    # so if n_components is 0.95, PCA selects the smallest number of components such that the cumulative explained variance ratio is at least 0.95 (95%)
+    pca = PCA(n_components=n_components)
+    X_pca = pca.fit_transform(X)
+    print(f"[PCA] Before: {X.shape} | After : {X_pca.shape}")
+    return X_pca, pca
+
+### TRAINING AND EVALUATING
+def train_and_evaluate_pipeline(X, y, model_type='knn', n_splits=3, random_state=42, verbose=True):
     # Encode target
     le = LabelEncoder()
     y_encoded = le.fit_transform(y)
@@ -177,39 +184,28 @@ def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_sta
 
 # Run EDA
 first_look_dataset(features, target)
-
-print("\nResults without pre processing")
-knn_corr, le_knn, score_knn_no_preprocessing = train_and_evaluate_with_kfold(features, target, 'knn')
-dt_corr, _, score_dt_no_preprocessing = train_and_evaluate_with_kfold(features, target, 'dt')
-svm_corr, _, score_svm_no_preprocessing = train_and_evaluate_with_kfold(features, target, 'svm')
+dummy_baseline(features, target)
 
 print("---")
 
 # Preprocessing
+features, _ = standardization(features)
 features, target = remove_outliers(features, target)
 features, target = balance_classes(features, target)
 
 n_components = visualize_pca(features, 0.95)
 
 X_corr = pearson_correlation_filtering(features, 0.9)
-X_std_corr, scaler_corr = standardization(X_corr)
-
-X_std, scaler_pca = standardization(features)
-X_pca, pca = apply_pca(X_std, n_components=0.95)
+X_pca, pca = pca_filtering(features, n_components=0.95)
 
 print("---")
 
 print("\nResults for X_correlation:")
-knn_corr, le_knn, score_knn_corr = train_and_evaluate_with_kfold(X_corr, target, 'knn')
-dt_corr, _, score_dt_corr = train_and_evaluate_with_kfold(X_corr, target, 'dt')
-svm_corr, _, score_svm_corr = train_and_evaluate_with_kfold(X_corr, target, 'svm')
-
-print("\nResults for X_standardized_correlation:")
-knn_corr, le_knn, score_knn_corr_standardized = train_and_evaluate_with_kfold(X_std_corr, target, 'knn')
-dt_corr, _, score_dt_corr_standardized = train_and_evaluate_with_kfold(X_std_corr, target, 'dt')
-svm_corr, _, score_svm_corr_standardized = train_and_evaluate_with_kfold(X_std_corr, target, 'svm')
+knn_corr, le_knn, score_knn_corr = train_and_evaluate_pipeline(X_corr, target, 'knn')
+dt_corr, _, score_dt_corr = train_and_evaluate_pipeline(X_corr, target, 'dt')
+svm_corr, _, score_svm_corr = train_and_evaluate_pipeline(X_corr, target, 'svm')
 
 print("\nResults for X_standardized_pca:")
-knn_pca, _, score_knn_pca_standardized = train_and_evaluate_with_kfold(X_pca, target, 'knn')
-dt_pca, _, score_dt_pca_standardized = train_and_evaluate_with_kfold(X_pca, target, 'dt')
-svm_pca, _, score_svm_pca_standardized = train_and_evaluate_with_kfold(X_pca, target, 'svm')
+knn_pca, _, score_knn_pca = train_and_evaluate_pipeline(X_pca, target, 'knn')
+dt_pca, _, score_dt_pca = train_and_evaluate_pipeline(X_pca, target, 'dt')
+svm_pca, _, score_svm_pca = train_and_evaluate_pipeline(X_pca, target, 'svm')
