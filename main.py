@@ -13,6 +13,7 @@ from sklearn.svm import SVC
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from sklearn.ensemble import IsolationForest
+from imblearn.over_sampling import SMOTE
 
 # import warnings
 # warnings.filterwarnings("ignore")
@@ -92,6 +93,11 @@ def remove_outliers(X, y):
     y_clean = y[outlier_labels == 1]
     return X_clean, y_clean
 
+def balance_classes(X, y):
+    smote = SMOTE()
+    X, y = smote.fit_resample(X, y)
+    return X, y
+
 def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_state=42):
     # Encode target
     le = LabelEncoder()
@@ -152,6 +158,7 @@ svm_corr, _ = train_and_evaluate_with_kfold(features, target, 'svm')
 
 # Preprocessing
 features, target = remove_outliers(features, target)
+features, target = balance_classes(features, target)
 
 X_corr = pearson_correlation_filtering(features, 0.9)
 n_components = visualize_pca(features, 0.95)
