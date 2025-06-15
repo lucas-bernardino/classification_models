@@ -20,20 +20,17 @@ from imblearn.over_sampling import SMOTE
 
 
 # Load data
-data = pd.read_csv('17.csv', header=None)
+FILE_NAME = "17.csv"
+data = pd.read_csv(FILE_NAME, header=None)
 features = data.iloc[1:, :-1]
 target = data.iloc[1:, -1]
 
 def first_look_dataset(X, y):
-    print("Dataset Shape:", data.shape)
-    print("Number of Features:", X.shape[1])
-    print("Class Distribution:\n", y.value_counts())
-    print("Number of Unique Classes:", y.nunique())
-    print("Missing Values:", data.isnull().sum().sum())
-    print("Feature Data Types:", X.dtypes.unique())
-    print("Target Data Type:", y.dtype)
+    print("File: ", FILE_NAME)
+    print("Dataset Shape:", X.shape)
+    print("Class Distribution:", y.value_counts())
     print("-----")
-    print(X.describe())
+    # print(X.describe())
     
     # Visualize class distribution
     plt.figure(figsize=(8, 5))
@@ -51,7 +48,7 @@ def pearson_correlation_filtering(X, threshold):
     upper_triangle = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)) # get only the upper triangle of the matrix to avoid duplicates
     features_correlated = [column for column in upper_triangle.columns if any(upper_triangle[column] > threshold)]
     X_dropped = pd.DataFrame(X).drop(columns=features_correlated)
-    print(f"Original features shape: {X.shape} | After Pearson correlation: {X_dropped.shape}")
+    print(f"[Pearson correlation] Before: {X.shape} | After: {X_dropped.shape}")
     return X_dropped
 
 def visualize_pca(X, n_components):
@@ -72,13 +69,12 @@ def visualize_pca(X, n_components):
     
     # Return number of components for 95% variance
     n_components = np.argmax(cumulative_variance >= 0.95) + 1
-    print(f"Components for 95% variance: {n_components}")
     return n_components
 
 def apply_pca(X, n_components):
     pca = PCA(n_components=n_components)
     X_pca = pca.fit_transform(X)
-    print(f"Features after PCA: {X_pca.shape[1]}")
+    print(f"[PCA] Before: {X.shape} | After : {X_pca.shape}")
     return X_pca, pca
 
 def standardization(X):
@@ -91,14 +87,19 @@ def remove_outliers(X, y):
     outlier_labels = iso.fit_predict(X)
     X_clean = X[outlier_labels == 1]
     y_clean = y[outlier_labels == 1]
+    
+    print(f"[Remove Outliers] Before: {X.shape} | After : {X_clean.shape}")
     return X_clean, y_clean
 
 def balance_classes(X, y):
     smote = SMOTE()
-    X, y = smote.fit_resample(X, y)
-    return X, y
+    X_balanced, y_balanced = smote.fit_resample(X, y)
+    
+    print(f"[Balance Classes] Before: {X.shape} | After: {X_balanced.shape}")
+    
+    return X_balanced, y_balanced
 
-def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_state=42):
+def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_state=42, verbose=True):
     # Encode target
     le = LabelEncoder()
     y_encoded = le.fit_transform(y)
@@ -106,7 +107,6 @@ def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_sta
     # Adjust n_splits based on minimum class size
     min_class_size = pd.Series(y_encoded).value_counts().min()
     n_splits = min(n_splits, max(2, min_class_size))
-    print(f"Using {n_splits}-fold CV due to class distribution")
     
     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
     
@@ -126,7 +126,8 @@ def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_sta
     # Results
     best_score = grid_search.best_score_
     best_params = grid_search.best_params_
-    print(f"{model_type.upper()} - Best Weighted F1-score (CV): {best_score:.3f} with params {best_params}")
+    if verbose:
+        print(f"{model_type.upper()} - Best Weighted F1-score (CV): {best_score:.3f}")
     
     y_pred = grid_search.best_estimator_.predict(X)
     
@@ -146,15 +147,17 @@ def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_sta
     plt.savefig(f"{model_type}_cv_scores.png", dpi=300)
     plt.close()
     
-    return grid_search, le
+    return grid_search, le, best_score
 
 # Run EDA
 first_look_dataset(features, target)
 
 print("\nResults without pre processing")
-knn_corr, le_knn = train_and_evaluate_with_kfold(features, target, 'knn')
-dt_corr, _ = train_and_evaluate_with_kfold(features, target, 'dt')
-svm_corr, _ = train_and_evaluate_with_kfold(features, target, 'svm')
+knn_corr, le_knn, score_knn_no_preprocessing = train_and_evaluate_with_kfold(features, target, 'knn')
+dt_corr, _, score_dt_no_preprocessing = train_and_evaluate_with_kfold(features, target, 'dt')
+svm_corr, _, score_svm_no_preprocessing = train_and_evaluate_with_kfold(features, target, 'svm')
+
+print("---")
 
 # Preprocessing
 features, target = remove_outliers(features, target)
@@ -166,22 +169,24 @@ X_pca, pca = apply_pca(features, n_components=0.95)
 X_std_corr, scaler_corr = standardization(X_corr)
 X_std_pca, scaler_pca = standardization(X_pca)
 
+print("---")
+
 print("\nResults for X_correlation:")
-knn_corr, le_knn = train_and_evaluate_with_kfold(X_corr, target, 'knn')
-dt_corr, _ = train_and_evaluate_with_kfold(X_corr, target, 'dt')
-svm_corr, _ = train_and_evaluate_with_kfold(X_corr, target, 'svm')
+knn_corr, le_knn, score_knn_corr = train_and_evaluate_with_kfold(X_corr, target, 'knn')
+dt_corr, _, score_dt_corr = train_and_evaluate_with_kfold(X_corr, target, 'dt')
+svm_corr, _, score_svm_corr = train_and_evaluate_with_kfold(X_corr, target, 'svm')
 
 print("\nResults for X_pca:")
-knn_pca, _ = train_and_evaluate_with_kfold(X_pca, target, 'knn')
-dt_pca, _ = train_and_evaluate_with_kfold(X_pca, target, 'dt')
-svm_pca, _ = train_and_evaluate_with_kfold(X_pca, target, 'svm')
+knn_pca, _, score_knn_pca = train_and_evaluate_with_kfold(X_pca, target, 'knn')
+dt_pca, _, score_dt_pca = train_and_evaluate_with_kfold(X_pca, target, 'dt')
+svm_pca, _, score_svm_pca = train_and_evaluate_with_kfold(X_pca, target, 'svm')
 
 print("\nResults for X_standardized_correlation:")
-knn_corr, le_knn = train_and_evaluate_with_kfold(X_std_corr, target, 'knn')
-dt_corr, _ = train_and_evaluate_with_kfold(X_std_corr, target, 'dt')
-svm_corr, _ = train_and_evaluate_with_kfold(X_std_corr, target, 'svm')
+knn_corr, le_knn, score_knn_corr_standardized = train_and_evaluate_with_kfold(X_std_corr, target, 'knn')
+dt_corr, _, score_dt_corr_standardized = train_and_evaluate_with_kfold(X_std_corr, target, 'dt')
+svm_corr, _, score_svm_corr_standardized = train_and_evaluate_with_kfold(X_std_corr, target, 'svm')
 
 print("\nResults for X_standardized_pca:")
-knn_pca, _ = train_and_evaluate_with_kfold(X_std_pca, target, 'knn')
-dt_pca, _ = train_and_evaluate_with_kfold(X_std_pca, target, 'dt')
-svm_pca, _ = train_and_evaluate_with_kfold(X_std_pca, target, 'svm')
+knn_pca, _, score_knn_pca_standardized = train_and_evaluate_with_kfold(X_std_pca, target, 'knn')
+dt_pca, _, score_dt_pca_standardized = train_and_evaluate_with_kfold(X_std_pca, target, 'dt')
+svm_pca, _, score_svm_pca_standardized = train_and_evaluate_with_kfold(X_std_pca, target, 'svm')
