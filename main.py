@@ -30,9 +30,8 @@ def first_look_dataset(X, y):
     print("Dataset Shape:", X.shape)
     print("Class Distribution:", y.value_counts())
     print("-----")
-    # print(X.describe())
     
-    # Visualize class distribution
+    # visualize class distribution
     plt.figure(figsize=(8, 5))
     sns.countplot(x=y)
     plt.title("Class Distribution")
@@ -42,16 +41,23 @@ def first_look_dataset(X, y):
     plt.close()
 
 def pearson_correlation_filtering(X, threshold):
-    # removes redundant features that are very similar correlated > threshold
+    """
+    highly correlated features may be redundant, as they provide similar information. 
+    removing one feature from such pairs can reduce dimensionality without significant information loss. 
+    the code below is doing basically that by applying Pearson correlation with the threshold
+    """
     
     corr_matrix = pd.DataFrame(X).corr().abs() # computes the absolute Pearson correlation
     upper_triangle = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)) # get only the upper triangle of the matrix to avoid duplicates
-    features_correlated = [column for column in upper_triangle.columns if any(upper_triangle[column] > threshold)]
-    X_dropped = pd.DataFrame(X).drop(columns=features_correlated)
+    features_correlated = [column for column in upper_triangle.columns if any(upper_triangle[column] > threshold)] # get the features correlated
+    X_dropped = pd.DataFrame(X).drop(columns=features_correlated) # remove the correlated features, leaving the others as it is.
     print(f"[Pearson correlation] Before: {X.shape} | After: {X_dropped.shape}")
     return X_dropped
 
 def visualize_pca(X, n_components):
+
+    
+    
     pca = PCA(n_components=0.95)
     pca.fit(X)
     explained_variance = pca.explained_variance_ratio_
@@ -67,22 +73,36 @@ def visualize_pca(X, n_components):
     plt.savefig("pca_variance.png", dpi=300)
     plt.close()
     
-    # Return number of components for 95% variance
+    # return number of components for 95% variance
     n_components = np.argmax(cumulative_variance >= 0.95) + 1
     return n_components
 
 def apply_pca(X, n_components):
+    """
+    reduces the number of dimensions in large datasets to principal components that retain most of the original information.
+    it does this by transforming potentially correlated variables into a smaller set of variables, called principal components.
+    """
+    
+    # if n_components is < 1, it'll reduce dimensionality by retaining the value in percetage of the variance.
+    # so if n_components is 0.95, PCA selects the smallest number of components such that the cumulative explained variance ratio is at least 0.95 (95%)
     pca = PCA(n_components=n_components)
     X_pca = pca.fit_transform(X)
     print(f"[PCA] Before: {X.shape} | After : {X_pca.shape}")
     return X_pca, pca
 
 def standardization(X):
+    """
+    removes the mean and scales to unit variance, making X look like a normally distributed data (gaussian).
+    some models assume the data is standardized.
+    """
+    
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     return X_scaled, scaler
 
 def remove_outliers(X, y):
+    
+    # contamination is the proportion of outliers in the data set
     iso = IsolationForest(contamination=0.1, random_state=42)
     outlier_labels = iso.fit_predict(X)
     X_clean = X[outlier_labels == 1]
@@ -92,6 +112,12 @@ def remove_outliers(X, y):
     return X_clean, y_clean
 
 def balance_classes(X, y):
+    """
+    if some classes have way more samples than others, 
+    it leads to a bias toward the majority class, and causes the model to ignore the minority class.
+    
+    SMOTE is used to balance imbalanced datasets by artificially generating new samples of the minority class.
+    """
     smote = SMOTE()
     X_balanced, y_balanced = smote.fit_resample(X, y)
     
@@ -163,11 +189,13 @@ print("---")
 features, target = remove_outliers(features, target)
 features, target = balance_classes(features, target)
 
-X_corr = pearson_correlation_filtering(features, 0.9)
 n_components = visualize_pca(features, 0.95)
-X_pca, pca = apply_pca(features, n_components=0.95)
+
+X_corr = pearson_correlation_filtering(features, 0.9)
 X_std_corr, scaler_corr = standardization(X_corr)
-X_std_pca, scaler_pca = standardization(X_pca)
+
+X_std, scaler_pca = standardization(features)
+X_pca, pca = apply_pca(X_std, n_components=0.95)
 
 print("---")
 
@@ -176,17 +204,12 @@ knn_corr, le_knn, score_knn_corr = train_and_evaluate_with_kfold(X_corr, target,
 dt_corr, _, score_dt_corr = train_and_evaluate_with_kfold(X_corr, target, 'dt')
 svm_corr, _, score_svm_corr = train_and_evaluate_with_kfold(X_corr, target, 'svm')
 
-print("\nResults for X_pca:")
-knn_pca, _, score_knn_pca = train_and_evaluate_with_kfold(X_pca, target, 'knn')
-dt_pca, _, score_dt_pca = train_and_evaluate_with_kfold(X_pca, target, 'dt')
-svm_pca, _, score_svm_pca = train_and_evaluate_with_kfold(X_pca, target, 'svm')
-
 print("\nResults for X_standardized_correlation:")
 knn_corr, le_knn, score_knn_corr_standardized = train_and_evaluate_with_kfold(X_std_corr, target, 'knn')
 dt_corr, _, score_dt_corr_standardized = train_and_evaluate_with_kfold(X_std_corr, target, 'dt')
 svm_corr, _, score_svm_corr_standardized = train_and_evaluate_with_kfold(X_std_corr, target, 'svm')
 
 print("\nResults for X_standardized_pca:")
-knn_pca, _, score_knn_pca_standardized = train_and_evaluate_with_kfold(X_std_pca, target, 'knn')
-dt_pca, _, score_dt_pca_standardized = train_and_evaluate_with_kfold(X_std_pca, target, 'dt')
-svm_pca, _, score_svm_pca_standardized = train_and_evaluate_with_kfold(X_std_pca, target, 'svm')
+knn_pca, _, score_knn_pca_standardized = train_and_evaluate_with_kfold(X_pca, target, 'knn')
+dt_pca, _, score_dt_pca_standardized = train_and_evaluate_with_kfold(X_pca, target, 'dt')
+svm_pca, _, score_svm_pca_standardized = train_and_evaluate_with_kfold(X_pca, target, 'svm')
