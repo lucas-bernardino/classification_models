@@ -17,7 +17,7 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
 
 # Load data
-data = pd.read_csv('09.csv', header=None)
+data = pd.read_csv('17.csv', header=None)
 features = data.iloc[1:, :-1]
 target = data.iloc[1:, -1]
 
@@ -41,22 +41,18 @@ def first_look_dataset(X, y):
     plt.savefig("class_distribution.png", dpi=300)
     plt.close()
 
-def variance_threshold(X, threshold=0.1):
-    selector = VarianceThreshold(threshold=threshold)
-    X_var = selector.fit_transform(X)
-    print(f"Features after variance threshold: {X_var.shape[1]}")
-    return X_var
-
-def pearson_correlation_filtering(X):
-    corr_matrix = pd.DataFrame(X).corr().abs()
-    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-    to_drop = [column for column in upper.columns if any(upper[column] > 0.95)]
-    X_dropped = pd.DataFrame(X).drop(columns=to_drop)
+def pearson_correlation_filtering(X, threshold):
+    # removes redundant features that are very similar correlated > threshold
+    
+    corr_matrix = pd.DataFrame(X).corr().abs() # computes the absolute Pearson correlation
+    upper_triangle = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)) # get only the upper triangle of the matrix to avoid duplicates
+    features_correlated = [column for column in upper_triangle.columns if any(upper_triangle[column] > threshold)]
+    X_dropped = pd.DataFrame(X).drop(columns=features_correlated)
     print(f"Original features shape: {X.shape} | After Pearson correlation: {X_dropped.shape}")
     return X_dropped
 
-def visualize_pca(X):
-    pca = PCA()
+def visualize_pca(X, n_components):
+    pca = PCA(n_components=0.95)
     pca.fit(X)
     explained_variance = pca.explained_variance_ratio_
     cumulative_variance = np.cumsum(explained_variance)
@@ -76,11 +72,8 @@ def visualize_pca(X):
     print(f"Components for 95% variance: {n_components}")
     return n_components
 
-def apply_pca(X, n_components=None):
-    if n_components is None:
-        pca = PCA(n_components=0.95)  # Retain 95% variance
-    else:
-        pca = PCA(n_components=n_components)
+def apply_pca(X, n_components):
+    pca = PCA(n_components=n_components)
     X_pca = pca.fit_transform(X)
     print(f"Features after PCA: {X_pca.shape[1]}")
     return X_pca, pca
@@ -143,22 +136,34 @@ def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_sta
 # Run EDA
 first_look_dataset(features, target)
 
+print("\nResults without pre processing")
+knn_corr, le_knn = train_and_evaluate_with_kfold(features, target, 'knn')
+dt_corr, _ = train_and_evaluate_with_kfold(features, target, 'dt')
+svm_corr, _ = train_and_evaluate_with_kfold(features, target, 'svm')
+
 # Preprocessing
-X_var = variance_threshold(features)
-X_corr = pearson_correlation_filtering(X_var)
-n_components = visualize_pca(X_corr)
-X_pca, pca = apply_pca(X_corr, n_components=n_components)
+X_corr = pearson_correlation_filtering(features, 0.9)
+n_components = visualize_pca(X_corr, 0.95)
+X_pca, pca = apply_pca(features, n_components=0.95)
 X_std_corr, scaler_corr = standardization(X_corr)
 X_std_pca, scaler_pca = standardization(X_pca)
 
+print("\nResults for X_correlation:")
+knn_corr, le_knn = train_and_evaluate_with_kfold(X_corr, target, 'knn')
+dt_corr, _ = train_and_evaluate_with_kfold(X_corr, target, 'dt')
+svm_corr, _ = train_and_evaluate_with_kfold(X_corr, target, 'svm')
 
-# Train and evaluate
-print("\nResults for X_standardized_correlation (balanced):")
+print("\nResults for X_pca:")
+knn_pca, _ = train_and_evaluate_with_kfold(X_pca, target, 'knn')
+dt_pca, _ = train_and_evaluate_with_kfold(X_pca, target, 'dt')
+svm_pca, _ = train_and_evaluate_with_kfold(X_pca, target, 'svm')
+
+print("\nResults for X_standardized_correlation:")
 knn_corr, le_knn = train_and_evaluate_with_kfold(X_std_corr, target, 'knn')
 dt_corr, _ = train_and_evaluate_with_kfold(X_std_corr, target, 'dt')
 svm_corr, _ = train_and_evaluate_with_kfold(X_std_corr, target, 'svm')
 
-print("\nResults for X_standardized_pca (balanced):")
+print("\nResults for X_standardized_pca:")
 knn_pca, _ = train_and_evaluate_with_kfold(X_std_pca, target, 'knn')
 dt_pca, _ = train_and_evaluate_with_kfold(X_std_pca, target, 'dt')
 svm_pca, _ = train_and_evaluate_with_kfold(X_std_pca, target, 'svm')
