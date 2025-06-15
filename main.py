@@ -14,6 +14,7 @@ from sklearn.dummy import DummyClassifier
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from sklearn.ensemble import IsolationForest
 from imblearn.over_sampling import SMOTE
+from sklearn.pipeline import Pipeline
 
 # import warnings
 # warnings.filterwarnings("ignore")
@@ -70,7 +71,7 @@ def balance_classes(X, y):
     
     SMOTE is used to balance imbalanced datasets by artificially generating new samples of the minority class.
     """
-    smote = SMOTE()
+    smote = SMOTE(random_state=42)
     X_balanced, y_balanced = smote.fit_resample(X, y)
     print(f"[Balance Classes] Before: {X.shape} | After: {X_balanced.shape}")
     
@@ -99,19 +100,22 @@ def pearson_correlation_filtering(X, threshold):
     
     return X_dropped
 
-def visualize_pca(X, n_components):
+def visualize_pca(X, threshold):
     """
     reduces the number of dimensions in large datasets to principal components that retain most of the original information.
     it does this by transforming potentially correlated variables into a smaller set of variables, called principal components.
     """
-    pca = PCA(n_components=n_components)
+    
+    # if n_components is < 1, it'll reduce dimensionality by retaining the value in percetage of the variance.
+    # so if n_components is 0.95, PCA selects the smallest number of components such that the cumulative explained variance ratio is at least 0.95 (95%)
+    pca = PCA(n_components=threshold)
     pca.fit(X)
     explained_variance = pca.explained_variance_ratio_
     cumulative_variance = np.cumsum(explained_variance)
     
     plt.figure(figsize=(8, 5))
     plt.plot(cumulative_variance, marker='o')
-    plt.axhline(y=0.95, color='r', linestyle='--')
+    plt.axhline(y=threshold, color='r', linestyle='--')
     plt.xlabel('Components')
     plt.ylabel('Variance')
     plt.title('PCA Visualization')
@@ -120,92 +124,91 @@ def visualize_pca(X, n_components):
     plt.close()
     
     # return number of components for 95% variance
-    n_components = np.argmax(cumulative_variance >= 0.95) + 1
-    return n_components
-
-def pca_filtering(X, n_components):
-    # if n_components is < 1, it'll reduce dimensionality by retaining the value in percetage of the variance.
-    # so if n_components is 0.95, PCA selects the smallest number of components such that the cumulative explained variance ratio is at least 0.95 (95%)
-    pca = PCA(n_components=n_components)
+    n_components = np.argmax(cumulative_variance >= threshold) + 1
+    pca = PCA(n_components=threshold)
     X_pca = pca.fit_transform(X)
     print(f"[PCA] Before: {X.shape} | After : {X_pca.shape}")
-    return X_pca, pca
+    
+    return n_components
 
 ### TRAINING AND EVALUATING
-def train_and_evaluate_pipeline(X, y, model_type='knn', n_splits=3, random_state=42, verbose=True):
-    # Encode target
-    le = LabelEncoder()
-    y_encoded = le.fit_transform(y)
+def train_and_evaluate_pipeline(X, y, model_type, pca_components=None):
+    #TODO: Explain
+    encoder = LabelEncoder()
+    y_encoded = encoder.fit_transform(y)
     
-    # Adjust n_splits based on minimum class size
-    min_class_size = pd.Series(y_encoded).value_counts().min()
-    n_splits = min(n_splits, max(2, min_class_size))
+    #TODO: Explain
+    min_class = pd.Series(y_encoded).value_counts().min()
+    n_splits = min(5, max(2, min_class))
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     
-    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-    
+    steps = [('scaler', StandardScaler())]
+    if pca_components:
+        steps.append(('pca', PCA(n_components=pca_components)))
+
     if model_type == 'knn':
-        param_grid = {'n_neighbors': [3, 5, 7], 'weights': ['uniform', 'distance'], 'metric': ['euclidean']}
-        model = KNeighborsClassifier()
+        steps.append(('clf', KNeighborsClassifier()))
+        grid = {'clf__n_neighbors': [3, 5, 7], 'clf__weights': ['uniform', 'distance']}
     elif model_type == 'dt':
-        param_grid = {'max_depth': [3, 5, None], 'min_samples_split': [2, 5, 10], 'criterion': ['gini', 'entropy'], 'class_weight': ['balanced', None]}
-        model = DecisionTreeClassifier(random_state=random_state)
+        steps.append(('clf', DecisionTreeClassifier(random_state=42)))
+        grid = {'clf__max_depth': [3, 5, None], 'clf__criterion': ['gini', 'entropy']}
     elif model_type == 'svm':
-        param_grid = {'C': [0.1, 1, 10], 'kernel': ['linear', 'rbf'], 'gamma': ['scale', 0.1], 'class_weight': ['balanced', None]}
-        model = SVC(probability=True, random_state=random_state)
+        steps.append(('clf', SVC(probability=True, random_state=42)))
+        grid = {'clf__C': [0.1, 1, 10], 'clf__kernel': ['linear', 'rbf'], 'clf__gamma': ['scale', 0.1]}
     
-    grid_search = GridSearchCV(model, param_grid, cv=cv, scoring='f1_weighted', n_jobs=-1)
-    grid_search.fit(X, y_encoded)
+    pipe = Pipeline(steps)
+    search = GridSearchCV(pipe, param_grid=grid, cv=cv, scoring="f1_weighted", n_jobs=-1)
+    search.fit(X, y_encoded)
     
-    # Results
-    best_score = grid_search.best_score_
-    best_params = grid_search.best_params_
-    if verbose:
-        print(f"{model_type.upper()} - Best Weighted F1-score (CV): {best_score:.3f}")
-    
-    y_pred = grid_search.best_estimator_.predict(X)
+    scores = cross_val_score(search.best_estimator_, X, y_encoded, cv=cv, scoring="f1_weighted")
+    print(f"{model_type.upper()} F1-weighted: {scores.mean():.3f} +/- {scores.std():.3f}")
+
+    y_pred = cross_val_predict(search.best_estimator_, X, y_encoded, cv=cv)
+    print(f"{model_type.upper()} Classification Report:")
+    print(classification_report(y_encoded, y_pred, target_names=[str(c) for c in encoder.classes_]))
     
     # Confusion matrix
-    cm = confusion_matrix(y_encoded, y_pred)
+    conf_matrix = confusion_matrix(y_encoded, y_pred)
     plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=le.classes_, yticklabels=le.classes_)
+    sns.heatmap(conf_matrix, fmt='d', cmap='Blues', xticklabels=encoder.classes_, yticklabels=encoder.classes_)
     plt.title(f"{model_type.upper()} Confusion Matrix")
     plt.savefig(f"{model_type}_confusion_matrix.png", dpi=300)
     plt.close()
     
     # CV scores boxplot
-    scores = cross_val_score(grid_search.best_estimator_, X, y_encoded, cv=cv, scoring='f1_weighted')
+    scores = cross_val_score(search.best_estimator_, X, y_encoded, cv=cv, scoring='f1_weighted')
     plt.figure(figsize=(6, 4))
     sns.boxplot(data=scores)
     plt.title(f"{model_type.upper()} Cross-Validation Weighted F1-Scores")
     plt.savefig(f"{model_type}_cv_scores.png", dpi=300)
     plt.close()
     
-    return grid_search, le, best_score
+    return search, encoder, scores
 
-# Run EDA
+# run EDA
 first_look_dataset(features, target)
+
+# test dataset with dummy classifier
 dummy_baseline(features, target)
 
 print("---")
 
-# Preprocessing
-features, _ = standardization(features)
+# preprocessing
 features, target = remove_outliers(features, target)
 features, target = balance_classes(features, target)
 
 n_components = visualize_pca(features, 0.95)
+visualize_pearson_correlation(features)
+X_corr = pearson_correlation_filtering(pd.DataFrame(features), 0.9)
 
-X_corr = pearson_correlation_filtering(features, 0.9)
-X_pca, pca = pca_filtering(features, n_components=0.95)
+print("\n  RUNNING WITH ORIGINAL VALUES  \n")
+for model_name in ['knn', 'dt', 'svm']:
+    train_and_evaluate_pipeline(features, target, model_name, pca_components=None)
 
-print("---")
+print("\n  RUNNING WITH PCA  \n")
+for model_name in ['knn', 'dt', 'svm']:
+    train_and_evaluate_pipeline(features, target, model_name, pca_components=n_components)
 
-print("\nResults for X_correlation:")
-knn_corr, le_knn, score_knn_corr = train_and_evaluate_pipeline(X_corr, target, 'knn')
-dt_corr, _, score_dt_corr = train_and_evaluate_pipeline(X_corr, target, 'dt')
-svm_corr, _, score_svm_corr = train_and_evaluate_pipeline(X_corr, target, 'svm')
-
-print("\nResults for X_standardized_pca:")
-knn_pca, _, score_knn_pca = train_and_evaluate_pipeline(X_pca, target, 'knn')
-dt_pca, _, score_dt_pca = train_and_evaluate_pipeline(X_pca, target, 'dt')
-svm_pca, _, score_svm_pca = train_and_evaluate_pipeline(X_pca, target, 'svm')
+print("\n  RUNNING WITH CORRELATION \n")
+for model_name in ['knn', 'dt', 'svm']:
+    train_and_evaluate_pipeline(features, target, model_name, pca_components=None)
