@@ -1,3 +1,4 @@
+from os import remove
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,6 +12,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import SVC
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
+from sklearn.ensemble import IsolationForest
 
 # import warnings
 # warnings.filterwarnings("ignore")
@@ -83,6 +85,13 @@ def standardization(X):
     X_scaled = scaler.fit_transform(X)
     return X_scaled, scaler
 
+def remove_outliers(X, y):
+    iso = IsolationForest(contamination=0.1, random_state=42)
+    outlier_labels = iso.fit_predict(X)
+    X_clean = X[outlier_labels == 1]
+    y_clean = y[outlier_labels == 1]
+    return X_clean, y_clean
+
 def train_and_evaluate_with_kfold(X, y, model_type='knn', n_splits=3, random_state=42):
     # Encode target
     le = LabelEncoder()
@@ -142,8 +151,10 @@ dt_corr, _ = train_and_evaluate_with_kfold(features, target, 'dt')
 svm_corr, _ = train_and_evaluate_with_kfold(features, target, 'svm')
 
 # Preprocessing
+features, target = remove_outliers(features, target)
+
 X_corr = pearson_correlation_filtering(features, 0.9)
-n_components = visualize_pca(X_corr, 0.95)
+n_components = visualize_pca(features, 0.95)
 X_pca, pca = apply_pca(features, n_components=0.95)
 X_std_corr, scaler_corr = standardization(X_corr)
 X_std_pca, scaler_pca = standardization(X_pca)
