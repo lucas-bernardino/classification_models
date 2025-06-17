@@ -201,6 +201,10 @@ dummy_baseline(features, target)
 
 print("---")
 
+print("\n  RUNNING BEFORE PRE PROCESSING  \n")
+for model_name in ['knn', 'dt', 'svm']:
+    train_and_evaluate_pipeline(features, target, model_name, pca_components=None)
+
 # preprocessing
 features, target = remove_outliers(features, target)
 features, target = balance_classes(features, target)
@@ -219,4 +223,4 @@ for model_name in ['knn', 'dt', 'svm']:
 
 print("\n  RUNNING WITH CORRELATION \n")
 for model_name in ['knn', 'dt', 'svm']:
-    train_and_evaluate_pipeline(features, target, model_name, pca_components=None)
+    train_and_evaluate_pipeline(X_corr, target, model_name, pca_components=None)
