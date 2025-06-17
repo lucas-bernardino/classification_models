@@ -1,11 +1,9 @@
-from os import remove
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.feature_selection import VarianceThreshold
 from sklearn.model_selection import StratifiedKFold, GridSearchCV, cross_val_score, cross_val_predict
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -44,14 +42,12 @@ def first_look_dataset(X, y):
 
 ### BASELINE
 def dummy_baseline(X, y):
-    le = LabelEncoder()
-    y_enc = le.fit_transform(y)
     dummy = DummyClassifier(random_state=42)
-    scores = cross_val_score(dummy, X, y_enc, cv=5, scoring="f1_weighted")
-    preds = cross_val_predict(dummy, X, y_enc, cv=5)
+    scores = cross_val_score(dummy, X, y, cv=5, scoring="f1_weighted")
+    preds = cross_val_predict(dummy, X, y, cv=5)
     print(f"Baseline (DummyClassifier): F1-weighted = {scores.mean():.3f} ± {scores.std():.3f}")
     print(f"DummyClassifier - Classification Report:")
-    print(classification_report(y_enc, preds, zero_division=0))
+    print(classification_report(y, preds, zero_division=0))
 
 ### PRE PROCESSING
 def remove_outliers(X, y):
@@ -133,19 +129,19 @@ def visualize_pca(X, threshold):
 
 ### TRAINING AND EVALUATING
 def train_and_evaluate_pipeline(X, y, model_type, pca_components=None):
-    #TODO: Explain
-    encoder = LabelEncoder()
-    y_encoded = encoder.fit_transform(y)
     
-    #TODO: Explain
-    min_class = pd.Series(y_encoded).value_counts().min()
+
+    # dynamically sets the number of CV splits based on the smallest class size, ensuring there are at least 2 and at most 5 folds
+    min_class = pd.Series(y).value_counts().min()
     n_splits = min(5, max(2, min_class))
     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     
+    # standardizes features to mean=0, std=1
     steps = [('scaler', StandardScaler())]
     if pca_components:
         steps.append(('pca', PCA(n_components=pca_components)))
 
+    # model and hyperparameters
     if model_type == 'knn':
         steps.append(('clf', KNeighborsClassifier()))
         grid = {'clf__n_neighbors': [3, 5, 7], 'clf__weights': ['uniform', 'distance']}
@@ -157,33 +153,45 @@ def train_and_evaluate_pipeline(X, y, model_type, pca_components=None):
         grid = {'clf__C': [0.1, 1, 10], 'clf__kernel': ['linear', 'rbf'], 'clf__gamma': ['scale', 0.1]}
     
     pipe = Pipeline(steps)
+    # GridSearchCV will find the best combination of hyperparameters
     search = GridSearchCV(pipe, param_grid=grid, cv=cv, scoring="f1_weighted", n_jobs=-1)
-    search.fit(X, y_encoded)
+    search.fit(X, y)
     
-    scores = cross_val_score(search.best_estimator_, X, y_encoded, cv=cv, scoring="f1_weighted")
+    scores = cross_val_score(search.best_estimator_, X, y, cv=cv, scoring="f1_weighted")
     print(f"{model_type.upper()} F1-weighted: {scores.mean():.3f} +/- {scores.std():.3f}")
 
-    y_pred = cross_val_predict(search.best_estimator_, X, y_encoded, cv=cv)
+    y_pred = cross_val_predict(search.best_estimator_, X, y, cv=cv)
     print(f"{model_type.upper()} Classification Report:")
-    print(classification_report(y_encoded, y_pred, target_names=[str(c) for c in encoder.classes_]))
+
+    """
+    in the classificatin report, some metrics are shown:
+    -> precision: it measures the accuracy of positive predictions, indicating how many of the items
+    the model labeled as positive were actually positive. A high precision means low false positive.
+    -> recall: it's used to measure the sensitivity of the model, indicating the model's ability to find
+    all the actual positives instances.
+    -> f1-score: it represents the harmonic mean of precision and recall. 1.00 means perfect precision 
+    and recall.
+    -> accuracy: it measures how many predictions were correct overall.
+    """
+    print(classification_report(y, y_pred))
     
-    # Confusion matrix
-    conf_matrix = confusion_matrix(y_encoded, y_pred)
+    # plot confusion matrix
+    conf_matrix = confusion_matrix(y, y_pred)
     plt.figure(figsize=(8, 6))
-    sns.heatmap(conf_matrix, fmt='d', cmap='Blues', xticklabels=encoder.classes_, yticklabels=encoder.classes_)
+    sns.heatmap(conf_matrix, fmt='d', cmap='Blues')
     plt.title(f"{model_type.upper()} Confusion Matrix")
     plt.savefig(f"{model_type}_confusion_matrix.png", dpi=300)
     plt.close()
     
-    # CV scores boxplot
-    scores = cross_val_score(search.best_estimator_, X, y_encoded, cv=cv, scoring='f1_weighted')
+    # boxplot of cv scores
+    scores = cross_val_score(search.best_estimator_, X, y, cv=cv, scoring='f1_weighted')
     plt.figure(figsize=(6, 4))
     sns.boxplot(data=scores)
     plt.title(f"{model_type.upper()} Cross-Validation Weighted F1-Scores")
     plt.savefig(f"{model_type}_cv_scores.png", dpi=300)
     plt.close()
     
-    return search, encoder, scores
+    return search, scores
 
 # run EDA
 first_look_dataset(features, target)
