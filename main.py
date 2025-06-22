@@ -29,6 +29,7 @@ def first_look_dataset(X, y):
     print("File: ", FILE_NAME)
     print("Dataset Shape:", X.shape)
     print("Class Distribution:", y.value_counts())
+    print("General information: ", X.describe())
     print("-----")
     
     # visualize class distribution
@@ -158,7 +159,7 @@ def train_and_evaluate_pipeline(X, y, model_type, pca_components=None):
     search.fit(X, y)
     
     scores = cross_val_score(search.best_estimator_, X, y, cv=cv, scoring="f1_weighted")
-    print(f"{model_type.upper()} F1-weighted: {scores.mean():.3f} +/- {scores.std():.3f}")
+    print(f"{model_type.upper()} F1-weighted: {scores.mean():.3f} +/- {scores.std():.3f} | params: {search.best_params_}")
 
     y_pred = cross_val_predict(search.best_estimator_, X, y, cv=cv)
     print(f"{model_type.upper()} Classification Report:")
